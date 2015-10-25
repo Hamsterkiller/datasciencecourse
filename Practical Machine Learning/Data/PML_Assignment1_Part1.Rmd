@@ -1,0 +1,173 @@
+---
+title: "PML_Assignment_part1"
+author: "Ilya Zemskov"
+date: "19OCT2015"
+output: html_document
+---
+
+# Weight Lifting Exersize Research
+The puprose of this research is to analize data about Weight Lifting Exercise from http://groupware.les.inf.puc-rio.br/har and deduce wether subjects did Exercises correct or incorrect.
+Data was recieved from the accelerometers on the belt, forearm, arm, and dumbell of 6 participants.
+
+## Initializing environment
+```{r}
+train <- read.csv("pml-training.csv")
+test <- read.csv("pml-testing.csv")
+library(caret)
+library(ggplot2)
+library(Amelia)
+```
+
+## Preparing data
+Since there are many variables in the dataset (160), let's first try to reduce their quantity with those, whose variance is near-zero.
+```{r}
+nzv <- nearZeroVar(train[, 1:159])
+train_nonzv <- train[, -nzv]
+```
+The size of the remaining dataset is:
+```{r, echo=FALSE}
+dim(train_nonzv)
+```
+Let's have a look at the map of NA's vs other values of the variables.
+```{r}
+missmap(train_nonzv, main="Map of NAs", col=c("yellow", "black"), legend=FALSE)
+```
+From the map of NAs we can see that there is still many variables with the most values equal to 'NA'
+```{r}
+findNAColumns <- function(x) {
+  flag = 0
+  
+  countNA <- sum(is.na(x))
+  na_ratio <- countNA/length(x)
+  # print(na_ratio, zero.print = ".")
+  if (na_ratio > 0.9) {
+    flag = 1
+  }
+  flag
+}
+# Applying our function to the train_nonzv dataset
+isTotalNa <- sapply(train_nonzv[, 1:99], findNAColumns)
+# Selectin columns from train_nonzv, which contains NA values less then on 90%
+train_nonzv_nona <- train_nonzv[, -which(as.logical(isTotalNa))]
+```
+
+Reapeting the mismap function on a new dataset...
+```{r}
+missmap(train_nonzv_nona, main="Map of NAs", col=c("yellow", "black"), legend=TRUE)
+```
+
+Now variables contain only minimum NAs
+Now, after some predictor reduction let's look is there any correlated predictors.
+```{r}
+train_for_cor <- train_nonzv_nona[, 5:58]
+train_for_cor <- train_for_cor[, which(sapply(train_for_cor, is.numeric))]
+corMatrix <- cor(train_for_cor)
+# finding correlated predictors
+```
+
+Summary of the correation matrix
+```{r}
+summary(corMatrix[upper.tri(corMatrix)])
+```
+
+```{r}
+highlyCorPredictors <- findCorrelation(corMatrix, cutoff = 0.75)
+nocor <- train_for_cor[, -highlyCorPredictors]
+```
+
+Summary of the new corMatrix
+```{r}
+corMatrix_new <- cor(nocor)
+```
+
+Is there any variables that are linear combinations of the other?
+```{r}
+combo_info <- findLinearCombos(nocor)
+```
+
+After all pre-processing steps finally this is the resulting dataset:
+```{r}
+result_train <- cbind(nocor[, 2:33], train$classe)
+colnames(result_train)[33] <- "classe"
+```
+
+## Fitting the model
+
+First I split training set 'result_train' on two smaller training sets to be able to estimate out-of-sample error
+```{r}
+set.seed(111)
+inTrain <- createDataPartition(y=result_train$classe, p=0.7, list=F)
+rtrain1 <- result_train[inTrain, ]
+rtrain2 <- result_train[-inTrain, ]
+```
+
+Let't try the 'Random Forest' metod tot rain out algorithm
+```{r}
+# use 3-fold CV to select optimal tuning parameters
+fitControl <- trainControl(method="cv", number=3, verboseIter=F)
+
+# fitting the model for training set
+fit <- train(classe ~ ., data=rtrain1, method="rf", trControl=fitControl)
+
+```
+
+Now I use my model to predict the classe values in the validation dataset rtrain2
+```{r}
+predict2 <- predict(fit, newdata = rtrain2)
+
+# show confusionMatrix
+confusionMatrix(rtrain2$classe, predict2)
+```
+
+As we can see on the validating dataset, the accuracy of the model is 99.3%.
+This is very good result and therefore I will use the 'Random Forest' Algorithm on the Test set.
+
+## Retraining algorithm on the full training dataset
+
+```{r}
+fit_full <- train(classe ~ ., data=result_train, method="rf", trControl=fitControl)
+```
+
+## Predict the values of the classe variale for the test dataet
+
+```{r}
+# preparing test 
+
+# excluding near zero variance vars
+test_nonzv <- test[, -nzv]
+
+# excluding NA vars
+isTotalNa_test <- sapply(test_nonzv[, 1:99], findNAColumns)
+test_nonzv_nona <- test_nonzv[, -which(as.logical(isTotalNa_test))]
+
+#excluding corelated vars
+test_for_cor <- test_nonzv_nona[, 5:58]
+test_for_cor <- test_for_cor[, which(sapply(test_for_cor, is.numeric))]
+nocor_test <- test_for_cor[, -highlyCorPredictors]
+
+# resulting test set
+result_test <- nocor_test[, 2: 33]
+
+# making a prediction
+predict_for_test <- predict(fit_full, newdata = result_test)
+
+# converting predictions to character format
+predict_for_test_ch <- as.character(predict_for_test)
+
+```
+
+# Writing results
+
+```{r}
+# create function to write predictions to files
+pml_write_files <- function(x) {
+    n <- length(x)
+    for(i in 1:n) {
+        filename <- paste0("problem_id_", i, ".txt")
+        write.table(x[i], file=filename, quote=F, row.names=F, col.names=F)
+    }
+}
+
+# create prediction files to submit
+pml_write_files(predict_for_test_ch)
+```
